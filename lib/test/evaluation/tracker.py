@@ -34,7 +34,7 @@ class Tracker:
     """
 
     def __init__(self, name: str, parameter_name: str, dataset_name: str, run_id: int = None, display_name: str = None,
-                 result_only=False):
+                 result_only=False, template_interval: int = -1, discard_frame_non_gt: bool = False):
         assert run_id is None or isinstance(run_id, int)
 
         self.name = name
@@ -42,6 +42,8 @@ class Tracker:
         self.dataset_name = dataset_name
         self.run_id = run_id
         self.display_name = display_name
+        self.template_interval = template_interval
+        self.discard_frame_non_gt = discard_frame_non_gt
 
         env = env_settings()
         if self.run_id is None:
@@ -114,24 +116,79 @@ class Tracker:
                 if key in tracker_out or val is not None:
                     output[key].append(val)
 
+        interval = self.template_interval
         # Initialize
-        image = self._read_image(seq.frames[0])
+        if interval == -1:
+            image_t = self._read_image(seq.frames[0])
+        
+            start_time = time.time()
+            out = tracker.initialize(image_t, init_info, 0)
+            if out is None:
+                out = {}
 
-        start_time = time.time()
-        out = tracker.initialize(image, init_info)
-        if out is None:
-            out = {}
+            prev_output = OrderedDict(out)
+            init_default = {'target_bbox': init_info.get('init_bbox'),
+                            'time': time.time() - start_time}
+            if tracker.params.save_all_boxes:
+                init_default['all_boxes'] = out['all_boxes']
+                init_default['all_scores'] = out['all_scores']
+    
+            _store_outputs(out, init_default)
 
-        prev_output = OrderedDict(out)
-        init_default = {'target_bbox': init_info.get('init_bbox'),
-                        'time': time.time() - start_time}
-        if tracker.params.save_all_boxes:
-            init_default['all_boxes'] = out['all_boxes']
-            init_default['all_scores'] = out['all_scores']
-
-        _store_outputs(out, init_default)
-
+        count, frame_template, save = 0, 0, True
         for frame_num, frame_path in enumerate(seq.frames[1:], start=1):
+
+            ## Take the closest ground truth from the past as a template
+            '''
+            template_num = frame_num - interval
+            gt_info = {'init_bbox' : list(seq.ground_truth_rect[frame_num-1])}
+            
+            if np.isnan(seq.ground_truth_rect[frame_num-1]).all():
+                template_num = prev_template
+                gt_info = prev_gt_info
+            else:
+                gt_info = {'init_bbox' : list(seq.ground_truth_rect[frame_num-1])}
+                prev_template = frame_num - 1
+                prev_gt_info = gt_info
+            '''
+            
+            ## Discard if there is no ground truth in the previous frame
+            if self.discard_frame_non_gt or interval != -1:
+                if np.isnan(seq.ground_truth_rect[frame_num]).all() or np.isnan(seq.ground_truth_rect[frame_template]).all():
+                    nan = {}
+                    nan['target_bbox'] = [-1, -1, -1, -1]
+                    count = 0
+                    save = True
+                    frame_template = frame_num + 1
+                    # print("skip:", frame_num)
+                    _store_outputs(nan, {'time': time.time() - start_time})
+                    continue
+                else:
+                    gt_info = {'init_bbox' : list(seq.ground_truth_rect[frame_template])}
+
+            if interval != -1:
+                image_t = self._read_image(seq.frames[frame_template])
+                start_time = time.time()
+                out = tracker.initialize(image_t, gt_info, frame_template)
+                if out is None:
+                    out = {}
+
+                prev_output = OrderedDict(out)
+                init_default = {'target_bbox': gt_info.get('init_bbox'),
+                                'time': time.time() - start_time}
+                if tracker.params.save_all_boxes:
+                    init_default['all_boxes'] = out['all_boxes']
+                    init_default['all_scores'] = out['all_scores']
+
+            if count == 0 and save and interval != -1:
+                nan = {}
+                nan['target_bbox'] = [-1, -1, -1, -1]
+                save = False
+                _store_outputs(nan, init_default)
+                if frame_template != 0:
+                    continue
+            # print("template:", frame_template, "search:", frame_num)
+            
             image = self._read_image(frame_path)
 
             start_time = time.time()
@@ -144,6 +201,11 @@ class Tracker:
             out = tracker.track(image, info)
             prev_output = OrderedDict(out)
             _store_outputs(out, {'time': time.time() - start_time})
+            count += 1
+
+            if count == interval:
+                frame_template = frame_num
+                count = 0
 
         for key in ['target_bbox', 'all_boxes', 'all_scores']:
             if key in output and len(output[key]) <= 1:

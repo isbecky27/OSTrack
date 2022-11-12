@@ -1,6 +1,7 @@
 import tikzplotlib
 import matplotlib
 import matplotlib.pyplot as plt
+import pandas as pd
 import os
 import torch
 import pickle
@@ -372,6 +373,16 @@ def print_results(trackers, dataset, report_name, merge_results=False,
     report_text = generate_formatted_report(tracker_disp_names, scores, table_name=report_name)
     print(report_text)
 
+    # Save result
+    resultFile = './output/test/tracking_results/ostrack/result.csv'
+    df = pd.read_csv(resultFile)
+    for idx, names in enumerate(tracker_disp_names):
+        df.loc[len(df.index)] = [names, '{:0.2f}'.format(scores['AUC'][idx].item()), 
+                                        '{:0.2f}'.format(scores['OP50'][idx].item()),
+                                        '{:0.2f}'.format(scores['OP75'][idx].item()),
+                                        '{:0.2f}'.format(scores['Precision'][idx].item()),
+                                        '{:0.2f}'.format(scores['Norm Precision'][idx].item())]
+    df.to_csv(resultFile, index=None)
 
 def plot_got_success(trackers, report_name):
     """ Plot success plot for GOT-10k dataset using the json reports.

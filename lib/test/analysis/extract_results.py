@@ -124,10 +124,10 @@ def extract_results(trackers, dataset, report_name, skip_missing_seq=False, plot
     valid_sequence = torch.ones(len(dataset), dtype=torch.uint8)
 
     for seq_id, seq in enumerate(tqdm(dataset)):
-        # Load anno
-        anno_bb = torch.tensor(seq.ground_truth_rect)
         target_visible = torch.tensor(seq.target_visible, dtype=torch.uint8) if seq.target_visible is not None else None
         for trk_id, trk in enumerate(trackers):
+            # Load anno
+            anno_bb = torch.tensor(seq.ground_truth_rect)
             # Load results
             base_results_path = '{}/{}'.format(trk.results_dir, seq.name)
             results_path = '{}.txt'.format(base_results_path)
@@ -141,6 +141,11 @@ def extract_results(trackers, dataset, report_name, skip_missing_seq=False, plot
                 else:
                     raise Exception('Result not found. {}'.format(results_path))
 
+            # remove invalid bounding box
+            index = np.where(pred_bb >= 0)
+            pred_bb = pred_bb[index].reshape((-1, 4))
+            anno_bb = anno_bb[index].reshape((-1, 4))
+            
             # Calculate measures
             err_overlap, err_center, err_center_normalized, valid_frame = calc_seq_err_robust(
                 pred_bb, anno_bb, seq.dataset, target_visible)

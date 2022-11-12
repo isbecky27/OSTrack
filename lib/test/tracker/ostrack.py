@@ -26,6 +26,7 @@ class OSTrack(BaseTracker):
         self.network.eval()
         self.preprocessor = Preprocessor()
         self.state = None
+        self.update_template = False
 
         self.feat_sz = self.cfg.TEST.SEARCH_SIZE // self.cfg.MODEL.BACKBONE.STRIDE
         # motion constrain
@@ -47,7 +48,7 @@ class OSTrack(BaseTracker):
         self.save_all_boxes = params.save_all_boxes
         self.z_dict1 = {}
 
-    def initialize(self, image, info: dict):
+    def initialize(self, image, info: dict, id = 0):
         # forward the template once
         z_patch_arr, resize_factor, z_amask_arr = sample_target(image, info['init_bbox'], self.params.template_factor,
                                                     output_sz=self.params.template_size)
@@ -63,6 +64,8 @@ class OSTrack(BaseTracker):
             self.box_mask_z = generate_mask_cond(self.cfg, 1, template.tensors.device, template_bbox)
 
         # save states
+        if id != 0:
+            return
         self.state = info['init_bbox']
         self.frame_id = 0
         if self.save_all_boxes:
@@ -94,6 +97,17 @@ class OSTrack(BaseTracker):
             dim=0) * self.params.search_size / resize_factor).tolist()  # (cx, cy, w, h) [0,1]
         # get the final box result
         self.state = clip_box(self.map_box_back(pred_box, resize_factor), H, W, margin=10)
+        
+        # no hann windows
+        '''
+        TODO
+        '''
+        
+        # calculate error of hann and no hanning window
+        self.update_template = False
+        '''
+        TODO
+        '''
 
         # for debug
         if self.debug:
@@ -127,9 +141,10 @@ class OSTrack(BaseTracker):
             all_boxes = self.map_box_back_batch(pred_boxes * self.params.search_size / resize_factor, resize_factor)
             all_boxes_save = all_boxes.view(-1).tolist()  # (4N, )
             return {"target_bbox": self.state,
-                    "all_boxes": all_boxes_save}
+                    "all_boxes": all_boxes_save,
+                    "update_template": self.update_template}
         else:
-            return {"target_bbox": self.state}
+            return {"target_bbox": self.state, "update_template": self.update_template}
 
     def map_box_back(self, pred_box: list, resize_factor: float):
         cx_prev, cy_prev = self.state[0] + 0.5 * self.state[2], self.state[1] + 0.5 * self.state[3]
