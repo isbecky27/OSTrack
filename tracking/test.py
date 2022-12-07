@@ -12,7 +12,7 @@ from lib.test.evaluation.tracker import Tracker
 
 
 def run_tracker(tracker_name, tracker_param, run_id=None, dataset_name='otb', sequence=None, debug=0, threads=0,
-                num_gpus=8, template_interval=-1, discard_frame_non_gt=False):
+                num_gpus=8, template_interval=-1, threshold=1.0, discard_frame_non_gt=False):
     """Run tracker on sequence or dataset.
     args:
         tracker_name: Name of tracking method.
@@ -29,7 +29,7 @@ def run_tracker(tracker_name, tracker_param, run_id=None, dataset_name='otb', se
     if sequence is not None:
         dataset = [dataset[sequence]]
 
-    trackers = [Tracker(tracker_name, tracker_param, dataset_name, run_id, template_interval=template_interval, discard_frame_non_gt=discard_frame_non_gt)]
+    trackers = [Tracker(tracker_name, tracker_param, dataset_name, run_id, template_interval=template_interval, threshold=threshold, discard_frame_non_gt=discard_frame_non_gt)]
 
     run_dataset(dataset, trackers, debug, threads, num_gpus=num_gpus)
 
@@ -39,9 +39,10 @@ def main():
     parser.add_argument('tracker_name', type=str, help='Name of tracking method.')
     parser.add_argument('tracker_param', type=str, help='Name of config file.')
     parser.add_argument('--runid', type=int, default=None, help='The run id.')
-    parser.add_argument('--dataset_name', type=str, default='otb', help='Name of dataset (otb, nfs, uav, tpl, vot, tn, gott, gotv, lasot).')
+    parser.add_argument('--dataset_name', type=str, default='uav', help='Name of dataset (otb, nfs, uav, tpl, vot, tn, gott, gotv, lasot).')
     parser.add_argument('--template_interval', type=int, default=-1)
-    parser.add_argument('--discard_frame_non_gt', type=bool, default=False)
+    parser.add_argument('--threshold', type=float, default=1.0, help='The threshold of norm distance to update the template.')
+    parser.add_argument('--discard_frame_non_gt', type=bool, default=False, help='If False, do not type anything.')
     parser.add_argument('--sequence', type=str, default=None, help='Sequence number or name.')
     parser.add_argument('--debug', type=int, default=0, help='Debug level.')
     parser.add_argument('--threads', type=int, default=0, help='Number of threads.')
@@ -55,7 +56,7 @@ def main():
         seq_name = args.sequence
 
     run_tracker(args.tracker_name, args.tracker_param, args.runid, args.dataset_name, seq_name, args.debug,
-                args.threads, num_gpus=args.num_gpus, template_interval=args.template_interval, discard_frame_non_gt=args.discard_frame_non_gt)
+                args.threads, num_gpus=args.num_gpus, template_interval=args.template_interval, threshold=args.threshold, discard_frame_non_gt=args.discard_frame_non_gt)
 
 
 if __name__ == '__main__':

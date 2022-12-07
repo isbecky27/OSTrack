@@ -34,7 +34,7 @@ class Tracker:
     """
 
     def __init__(self, name: str, parameter_name: str, dataset_name: str, run_id: int = None, display_name: str = None,
-                 result_only=False, template_interval: int = -1, discard_frame_non_gt: bool = False):
+                 result_only=False, template_interval: int = -1, threshold: float = 1.0, discard_frame_non_gt: bool = False):
         assert run_id is None or isinstance(run_id, int)
 
         self.name = name
@@ -43,6 +43,7 @@ class Tracker:
         self.run_id = run_id
         self.display_name = display_name
         self.template_interval = template_interval
+        self.threshold = threshold
         self.discard_frame_non_gt = discard_frame_non_gt
 
         env = env_settings()
@@ -62,7 +63,7 @@ class Tracker:
             self.tracker_class = None
 
     def create_tracker(self, params):
-        tracker = self.tracker_class(params, self.dataset_name)
+        tracker = self.tracker_class(params, self.dataset_name, self.threshold)
         return tracker
 
     def run_sequence(self, seq, debug=None):
@@ -116,13 +117,36 @@ class Tracker:
                 if key in tracker_out or val is not None:
                     output[key].append(val)
 
-        interval = self.template_interval
         # Initialize
+        init_frame = 0
+        interval = self.template_interval
         if interval == -1:
-            image_t = self._read_image(seq.frames[0])
-        
+            
+            # Find the first template
+            while init_frame < len(seq.frames):
+                if not np.isnan(seq.ground_truth_rect[init_frame]).all():
+                    break
+                nan = {}
+                nan['target_bbox'] = [-1, -1, -1, -1]
+                _store_outputs(nan, {'time': -1})
+                init_frame += 1
+
+            if init_frame >= len(seq.frames) - 1:
+                print("No any correct detection.")
+                for key in ['target_bbox', 'all_boxes', 'all_scores']:
+                    if key in output and len(output[key]) <= 1:
+                        output.pop(key)
+                output['update_count'] = 0
+                return output
+
+            print("Start at frame", init_frame)
+            if init_frame != 0:
+                init_info = {'init_bbox' : list(seq.ground_truth_rect[init_frame])}
+
+            image_t = self._read_image(seq.frames[init_frame])
+
             start_time = time.time()
-            out = tracker.initialize(image_t, init_info, 0)
+            out = tracker.initialize(image_t, init_info, init_frame)
             if out is None:
                 out = {}
 
@@ -135,8 +159,9 @@ class Tracker:
     
             _store_outputs(out, init_default)
 
-        count, frame_template, save = 0, 0, True
-        for frame_num, frame_path in enumerate(seq.frames[1:], start=1):
+        update, update_count = False, 0
+        count, frame_template, save = 0, init_frame, True
+        for frame_num, frame_path in enumerate(seq.frames[init_frame+1:], start=init_frame+1):
 
             ## Take the closest ground truth from the past as a template
             '''
@@ -160,7 +185,7 @@ class Tracker:
                     count = 0
                     save = True
                     frame_template = frame_num + 1
-                    # print("skip:", frame_num)
+                    # print("skip:", frame_num, "frame_template:", frame_template)
                     _store_outputs(nan, {'time': time.time() - start_time})
                     continue
                 else:
@@ -170,6 +195,7 @@ class Tracker:
                 image_t = self._read_image(seq.frames[frame_template])
                 start_time = time.time()
                 out = tracker.initialize(image_t, gt_info, frame_template)
+                update_count += 1
                 if out is None:
                     out = {}
 
@@ -207,10 +233,30 @@ class Tracker:
                 frame_template = frame_num
                 count = 0
 
+            if (out['update_template'] or update) and interval == -1:
+                update = True
+                # print("update template:", frame_num, "to", frame_num-1)
+                if not np.isnan(seq.ground_truth_rect[frame_num-1]).all():
+                    gt_info = {'init_bbox' : list(seq.ground_truth_rect[frame_num-1])}
+                    image_t = self._read_image(seq.frames[frame_num-1])
+                    start_time = time.time()
+                    out = tracker.initialize(image_t, gt_info, None)
+                    update_count += 1
+                    if out is None:
+                        out = {}
+
+                    prev_output = OrderedDict(out)
+                    init_default = {'target_bbox': gt_info.get('init_bbox'),
+                                    'time': time.time() - start_time}
+                    if tracker.params.save_all_boxes:
+                        init_default['all_boxes'] = out['all_boxes']
+                        init_default['all_scores'] = out['all_scores']
+                    update = False
+
         for key in ['target_bbox', 'all_boxes', 'all_scores']:
             if key in output and len(output[key]) <= 1:
                 output.pop(key)
-
+        output['update_count'] = update_count
         return output
 
     def run_video(self, videofilepath, optional_box=None, debug=None, visdom_info=None, save_results=False):

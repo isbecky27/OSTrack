@@ -1,4 +1,5 @@
 import math
+import numpy as np
 
 from lib.models.ostrack import build_ostrack
 from lib.test.tracker.basetracker import BaseTracker
@@ -17,7 +18,7 @@ from lib.utils.ce_utils import generate_mask_cond
 
 
 class OSTrack(BaseTracker):
-    def __init__(self, params, dataset_name):
+    def __init__(self, params, dataset_name, threshold):
         super(OSTrack, self).__init__(params)
         network = build_ostrack(params.cfg, training=False)
         network.load_state_dict(torch.load(self.params.checkpoint, map_location='cpu')['net'], strict=True)
@@ -27,6 +28,7 @@ class OSTrack(BaseTracker):
         self.preprocessor = Preprocessor()
         self.state = None
         self.update_template = False
+        self.threshold = threshold
 
         self.feat_sz = self.cfg.TEST.SEARCH_SIZE // self.cfg.MODEL.BACKBONE.STRIDE
         # motion constrain
@@ -48,7 +50,7 @@ class OSTrack(BaseTracker):
         self.save_all_boxes = params.save_all_boxes
         self.z_dict1 = {}
 
-    def initialize(self, image, info: dict, id = 0):
+    def initialize(self, image, info: dict, id = None):
         # forward the template once
         z_patch_arr, resize_factor, z_amask_arr = sample_target(image, info['init_bbox'], self.params.template_factor,
                                                     output_sz=self.params.template_size)
@@ -64,10 +66,9 @@ class OSTrack(BaseTracker):
             self.box_mask_z = generate_mask_cond(self.cfg, 1, template.tensors.device, template_bbox)
 
         # save states
-        if id != 0:
-            return
+        if id:
+            self.frame_id = id
         self.state = info['init_bbox']
-        self.frame_id = 0
         if self.save_all_boxes:
             '''save all predicted boxes'''
             all_boxes_save = info['init_bbox'] * self.cfg.MODEL.NUM_OBJECT_QUERIES
@@ -99,15 +100,26 @@ class OSTrack(BaseTracker):
         self.state = clip_box(self.map_box_back(pred_box, resize_factor), H, W, margin=10)
         
         # no hann windows
-        '''
-        TODO
-        '''
+        with torch.no_grad():
+            no_hanning_boxes = self.network.box_head.cal_bbox(out_dict['score_map'], out_dict['size_map'], out_dict['offset_map'])
+            no_hanning_boxes = no_hanning_boxes.view(-1, 4)
+            no_hanning_box = (no_hanning_boxes.mean(
+                dim=0) * self.params.search_size / resize_factor).tolist()  # (cx, cy, w, h) [0,1]
+            no_hanning_result = clip_box(self.map_box_back(no_hanning_box, resize_factor), H, W, margin=10)
+        # if no_hanning_box != pred_box or self.frame_id == 1261:
+        #     print("Frame_id:", self.frame_id)
+        #     print("no hanning:", no_hanning_result)
+        #     print("hanning:", self.state)
         
-        # calculate error of hann and no hanning window
+        # calculate distance of hann and no hanning window
         self.update_template = False
-        '''
-        TODO
-        '''
+        dist = self.calc_center_dist(self.state, no_hanning_result)
+        norm_dist = self.calc_center_dist(self.state, no_hanning_result, True)
+
+        if norm_dist > self.threshold:
+            self.update_template = True
+            # print("Frame_id:", self.frame_id)
+            # print("dist:", dist, "norm_dist:", norm_dist)
 
         # for debug
         if self.debug:
@@ -145,6 +157,19 @@ class OSTrack(BaseTracker):
                     "update_template": self.update_template}
         else:
             return {"target_bbox": self.state, "update_template": self.update_template}
+
+    def calc_center_dist(self, pred_bb, anno_bb, normalized=False):
+        pred_bb = np.array(pred_bb)
+        anno_bb = np.array(anno_bb)
+        pred_center = pred_bb[:2] + 0.5 * (pred_bb[2:] - 1.0)
+        anno_center = anno_bb[:2] + 0.5 * (anno_bb[2:] - 1.0)
+
+        if normalized:
+            pred_center = pred_center / anno_bb[2:]
+            anno_center = anno_center / anno_bb[2:]
+
+        center_dist = np.sqrt(((pred_center - anno_center)**2).sum())
+        return center_dist
 
     def map_box_back(self, pred_box: list, resize_factor: float):
         cx_prev, cy_prev = self.state[0] + 0.5 * self.state[2], self.state[1] + 0.5 * self.state[3]

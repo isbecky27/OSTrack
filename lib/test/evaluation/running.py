@@ -2,6 +2,7 @@ import time
 from datetime import timedelta
 
 import numpy as np
+import pandas as pd
 import multiprocessing
 import os
 import sys
@@ -154,7 +155,8 @@ def run_sequence(seq: Sequence, tracker: Tracker, debug=False, num_gpu=8):
 
     if not debug:
         _save_tracker_output(seq, tracker, output)
-
+    
+    return output
 
 def run_dataset(dataset, trackers, debug=False, threads=0, num_gpus=8):
     """Runs a list of trackers on a dataset.
@@ -177,9 +179,26 @@ def run_dataset(dataset, trackers, debug=False, threads=0, num_gpus=8):
         mode = 'parallel'
 
     if mode == 'sequential':
+
+        result_path = trackers[0].results_dir
+        if os.path.exists(f'{trackers[0].results_dir}/count.csv'):
+            df = pd.read_csv(f'{trackers[0].results_dir}/count.csv')
+        else:
+            df = pd.DataFrame(data={'seq':[], 'len':[], 'update':[], 'avg(frame/updates)':[]})
+
         for seq in dataset:
             for tracker_info in trackers:
-                run_sequence(seq, tracker_info, debug=debug)
+                seq_output = run_sequence(seq, tracker_info, debug=debug)
+                if not seq_output:
+                    continue
+                update_count = seq_output['update_count']
+                if ((df['seq'] == seq.name) & (df['update'] == update_count)).any():
+                    continue
+                if update_count == 0:
+                    df.loc[len(df.index)] = [seq.name, len(seq.frames), update_count, 0]
+                else:
+                    df.loc[len(df.index)] = [seq.name, len(seq.frames), update_count, len(seq.frames)/update_count]
+        df.to_csv(f'{trackers[0].results_dir}/count.csv', index = False)
     elif mode == 'parallel':
         param_list = [(seq, tracker_info, debug, num_gpus) for seq, tracker_info in product(dataset, trackers)]
         with multiprocessing.Pool(processes=threads) as pool:
