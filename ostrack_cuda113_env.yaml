@@ -1,4 +1,4 @@
-name: false
+name: # env name
 channels:
   - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/pytorch
   - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge
@@ -127,4 +127,4 @@ dependencies:
     - werkzeug==2.1.1
     - yaspin==2.1.0
     - zipp==3.7.0
-prefix: /public/yebotao/conda_envs/ostrack
+
